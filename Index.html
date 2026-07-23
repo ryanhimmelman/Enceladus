@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Chart Plotter</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a1622; }
+  #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+
+  #hud {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    z-index: 1000;
+    background: rgba(10, 22, 34, 0.88);
+    color: #d7ecff;
+    padding: 10px 14px 8px 14px;
+    box-sizing: border-box;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    border-bottom: 1px solid #1c3a52;
+    backdrop-filter: blur(4px);
+  }
+  #hud .stats { display: flex; gap: 18px; flex-wrap: wrap; }
+  #hud .stat-label { color: #6fa8d0; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; display: block; }
+  #hud .stat-value { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #status-dot { width: 9px; height: 9px; border-radius: 50%; background: #e6543c; display: inline-block; margin-right: 6px; transition: background 0.3s; }
+  #status-dot.live { background: #35d07f; box-shadow: 0 0 6px #35d07f; }
+
+  #controls {
+    position: absolute;
+    bottom: 20px; right: 12px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .ctrl-btn {
+    background: rgba(10, 22, 34, 0.92);
+    color: #d7ecff;
+    border: 1px solid #1c3a52;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    cursor: pointer;
+  }
+  .ctrl-btn:active { background: #143049; }
+  .ctrl-btn.active { border-color: #35d07f; color: #35d07f; }
+
+  #err-banner {
+    position: absolute;
+    top: 62px; left: 12px; right: 12px;
+    z-index: 1000;
+    background: rgba(230, 84, 60, 0.95);
+    color: white;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12.5px;
+    display: none;
+  }
+
+  .leaflet-control-layers { background: rgba(10,22,34,0.92) !important; color: #d7ecff !important; border-color: #1c3a52 !important; }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="stats">
+    <div><span class="stat-label"><span id="status-dot"></span>Status</span><span class="stat-value" id="status-text">Waiting</span></div>
+    <div><span class="stat-label">Lat / Lon</span><span class="stat-value" id="pos-text">--</span></div>
+    <div><span class="stat-label">Speed</span><span class="stat-value" id="speed-text">-- kn</span></div>
+    <div><span class="stat-label">Heading</span><span class="stat-value" id="heading-text">--&deg;</span></div>
+    <div><span class="stat-label">Accuracy</span><span class="stat-value" id="acc-text">-- m</span></div>
+  </div>
+</div>
+
+<div id="err-banner"></div>
+<div id="map"></div>
+
+<div id="controls">
+  <button class="ctrl-btn active" id="track-toggle">Live Tracking</button>
+  <button class="ctrl-btn" id="center-btn">Center on Me</button>
+  <button class="ctrl-btn" id="clear-btn">Clear Trail</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+  const map = L.map('map', { zoomControl: true, attributionControl: true }).setView([37.8, -122.4], 12);
+
+  // Base nautical / chart layers
+  const seaMarks = L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', {
+    attribution: 'Seamarks &copy; OpenSeaMap',
+    maxZoom: 18,
+    className: 'seamark-layer'
+  });
+
+  const osmBase = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19
+  }).addTo(map);
+
+  const seaBase = L.tileLayer('https://t1.openseamap.org/seamark/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenSeaMap',
+    maxZoom: 18
+  });
+
+  const esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    attribution: 'Tiles &copy; Esri',
+    maxZoom: 19
+  });
+
+  seaMarks.addTo(map);
+
+  L.control.layers(
+    { 'Street': osmBase, 'Satellite': esriSat },
+    { 'Nautical marks (OpenSeaMap)': seaMarks },
+    { position: 'topright' }
+  ).addTo(map);
+
+  // Vessel marker (rotates with heading)
+  const boatIcon = L.divIcon({
+    className: 'boat-icon',
+    html: `<div id="boat-arrow" style="width:0;height:0;border-left:9px solid transparent;border-right:9px solid transparent;border-bottom:22px solid #35d07f;filter:drop-shadow(0 0 3px rgba(0,0,0,0.6));transform-origin:50% 65%;"></div>`,
+    iconSize: [18, 22],
+    iconAnchor: [9, 14]
+  });
+
+  let marker = null;
+  let accuracyCircle = null;
+  let trail = L.polyline([], { color: '#35d07f', weight: 3, opacity: 0.8 }).addTo(map);
+  let trailPoints = [];
+  let watchId = null;
+  let tracking = true;
+  let firstFix = true;
+  let lastHeading = 0;
+
+  function knots(mps) { return mps == null ? null : mps * 1.94384; }
+
+  function setStatus(live, text) {
+    document.getElementById('status-dot').classList.toggle('live', live);
+    document.getElementById('status-text').textContent = text;
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('err-banner');
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+  function hideError() {
+    document.getElementById('err-banner').style.display = 'none';
+  }
+
+  function onPosition(pos) {
+    hideError();
+    const { latitude, longitude, accuracy, speed, heading } = pos.coords;
+
+    setStatus(true, 'Live');
+    document.getElementById('pos-text').textContent = latitude.toFixed(5) + ', ' + longitude.toFixed(5);
+    document.getElementById('acc-text').textContent = Math.round(accuracy) + ' m';
+
+    const kn = knots(speed);
+    document.getElementById('speed-text').textContent = (kn != null && !isNaN(kn)) ? kn.toFixed(1) + ' kn' : '-- kn';
+
+    if (heading != null && !isNaN(heading)) {
+      lastHeading = heading;
+      document.getElementById('heading-text').textContent = Math.round(heading) + '\u00B0';
+      const arrow = document.getElementById('boat-arrow');
+      if (arrow) arrow.style.transform = 'rotate(' + heading + 'deg)';
+    }
+
+    const latlng = [latitude, longitude];
+
+    if (!marker) {
+      marker = L.marker(latlng, { icon: boatIcon }).addTo(map);
+    } else {
+      marker.setLatLng(latlng);
+    }
+
+    if (!accuracyCircle) {
+      accuracyCircle = L.circle(latlng, { radius: accuracy, color: '#35d07f', weight: 1, fillOpacity: 0.08, opacity: 0.3 }).addTo(map);
+    } else {
+      accuracyCircle.setLatLng(latlng);
+      accuracyCircle.setRadius(accuracy);
+    }
+
+    trailPoints.push(latlng);
+    trail.setLatLngs(trailPoints);
+
+    if (firstFix) {
+      map.setView(latlng, 16);
+      firstFix = false;
+    }
+  }
+
+  function onError(err) {
+    setStatus(false, 'Error');
+    let msg = 'Location error: ' + err.message;
+    if (err.code === 1) msg = 'Location permission denied. Enable it in your browser/site settings.';
+    if (err.code === 3) msg = 'Location request timed out. Retrying...';
+    showError(msg);
+  }
+
+  function startTracking() {
+    if (!('geolocation' in navigator)) {
+      showError('Geolocation is not supported by this browser.');
+      setStatus(false, 'Unsupported');
+      return;
+    }
+    setStatus(false, 'Locating...');
+    watchId = navigator.geolocation.watchPosition(onPosition, onError, {
+      enableHighAccuracy: true,
+      maximumAge: 1000,
+      timeout: 15000
+    });
+    tracking = true;
+  }
+
+  function stopTracking() {
+    if (watchId != null) navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+    tracking = false;
+    setStatus(false, 'Paused');
+  }
+
+  document.getElementById('track-toggle').addEventListener('click', function() {
+    if (tracking) {
+      stopTracking();
+      this.classList.remove('active');
+      this.textContent = 'Resume Tracking';
+    } else {
+      startTracking();
+      this.classList.add('active');
+      this.textContent = 'Live Tracking';
+    }
+  });
+
+  document.getElementById('center-btn').addEventListener('click', function() {
+    if (marker) map.setView(marker.getLatLng(), map.getZoom());
+  });
+
+  document.getElementById('clear-btn').addEventListener('click', function() {
+    trailPoints = [];
+    trail.setLatLngs([]);
+  });
+
+  startTracking();
+</script>
+</body>
+</html>
