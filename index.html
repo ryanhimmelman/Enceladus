@@ -65,6 +65,41 @@
   }
 
   .leaflet-control-layers { background: rgba(10,22,34,0.92) !important; color: #d7ecff !important; border-color: #1c3a52 !important; }
+
+  #chart-panel {
+    display: none;
+    position: absolute;
+    bottom: 20px; left: 12px; right: 12px;
+    max-width: 380px;
+    z-index: 1100;
+    background: rgba(10, 22, 34, 0.96);
+    border: 1px solid #1c3a52;
+    border-radius: 10px;
+    padding: 12px;
+    color: #d7ecff;
+    font-size: 12.5px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    max-height: 78vh;
+    overflow-y: auto;
+  }
+  #chart-panel.open { display: block; }
+  #chart-panel-header { display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 14px; margin-bottom: 10px; }
+  #chart-panel-close { background: none; border: none; color: #d7ecff; font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px; }
+  .cp-row { margin-bottom: 10px; }
+  .cp-hint { color: #8fb8d8; font-size: 11.5px; line-height: 1.4; margin: 6px 0 12px 0; }
+  #chart-preview { max-width: 100%; max-height: 100px; display: block; margin-bottom: 10px; border-radius: 4px; border: 1px solid #1c3a52; }
+  .cp-corner { margin-bottom: 10px; border-top: 1px solid #16293c; padding-top: 8px; }
+  .cp-corner-label { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; color: #6fa8d0; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .pick-btn { background: #143049; color: #d7ecff; border: 1px solid #24507a; border-radius: 5px; padding: 3px 8px; font-size: 11px; cursor: pointer; }
+  .pick-btn.active { background: #35d07f; color: #0a1622; border-color: #35d07f; }
+  .cp-inputs { display: flex; gap: 6px; }
+  .cp-inputs input { flex: 1; min-width: 0; background: #0e2032; border: 1px solid #1c3a52; color: #d7ecff; border-radius: 5px; padding: 6px 8px; font-size: 13px; }
+  .cp-opacity-label { display: block; margin-bottom: 4px; color: #6fa8d0; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.03em; }
+  #chart-opacity { width: 100%; }
+  .cp-actions { display: flex; gap: 8px; }
+  .cp-actions .ctrl-btn { flex: 1; }
+  #chart-status { font-size: 11.5px; color: #8fb8d8; min-height: 14px; }
+  input[type=file]#chart-file { color: #d7ecff; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -86,9 +121,58 @@
   <button class="ctrl-btn active" id="track-toggle">Live Tracking</button>
   <button class="ctrl-btn" id="center-btn">Center on Me</button>
   <button class="ctrl-btn" id="clear-btn">Clear Trail</button>
+  <button class="ctrl-btn" id="chart-toggle">Add Chart Photo</button>
+</div>
+
+<div id="chart-panel">
+  <div id="chart-panel-header">
+    <span>Georeference Chart Photo</span>
+    <button id="chart-panel-close">&times;</button>
+  </div>
+
+  <div class="cp-row">
+    <input type="file" id="chart-file" accept="image/*">
+  </div>
+  <img id="chart-preview" style="display:none;">
+
+  <p class="cp-hint">Enter the lat/lon of three corners of your photo (top&#8209;left, top&#8209;right, bottom&#8209;left) &mdash; read them off the chart's own printed lat/lon tick marks. Or tap "Pick" then tap the matching spot on the map.</p>
+
+  <div class="cp-corner" data-corner="tl">
+    <div class="cp-corner-label">Top&#8209;left <button class="pick-btn" data-corner="tl">Pick</button></div>
+    <div class="cp-inputs">
+      <input type="number" step="any" placeholder="Lat" class="cp-lat" data-corner="tl">
+      <input type="number" step="any" placeholder="Lon" class="cp-lon" data-corner="tl">
+    </div>
+  </div>
+  <div class="cp-corner" data-corner="tr">
+    <div class="cp-corner-label">Top&#8209;right <button class="pick-btn" data-corner="tr">Pick</button></div>
+    <div class="cp-inputs">
+      <input type="number" step="any" placeholder="Lat" class="cp-lat" data-corner="tr">
+      <input type="number" step="any" placeholder="Lon" class="cp-lon" data-corner="tr">
+    </div>
+  </div>
+  <div class="cp-corner" data-corner="bl">
+    <div class="cp-corner-label">Bottom&#8209;left <button class="pick-btn" data-corner="bl">Pick</button></div>
+    <div class="cp-inputs">
+      <input type="number" step="any" placeholder="Lat" class="cp-lat" data-corner="bl">
+      <input type="number" step="any" placeholder="Lon" class="cp-lon" data-corner="bl">
+    </div>
+  </div>
+
+  <div class="cp-row">
+    <label class="cp-opacity-label">Opacity <span id="opacity-val">70%</span></label>
+    <input type="range" id="chart-opacity" min="10" max="100" value="70">
+  </div>
+
+  <div class="cp-row cp-actions">
+    <button class="ctrl-btn" id="chart-apply">Place on Map</button>
+    <button class="ctrl-btn" id="chart-remove">Remove</button>
+  </div>
+  <div id="chart-status"></div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/IvanSanchez/Leaflet.ImageOverlay.Rotated@gh-pages/Leaflet.ImageOverlay.Rotated.js"></script>
 <script>
   const map = L.map('map', { zoomControl: true, attributionControl: true }).setView([37.8, -122.4], 12);
 
@@ -264,6 +348,115 @@
   });
 
   startTracking();
+
+  // ---------- Chart photo georeferencing ----------
+  const chartPanel = document.getElementById('chart-panel');
+  const chartToggle = document.getElementById('chart-toggle');
+  const chartFileInput = document.getElementById('chart-file');
+  const chartPreview = document.getElementById('chart-preview');
+  const chartStatus = document.getElementById('chart-status');
+  const opacitySlider = document.getElementById('chart-opacity');
+  const opacityVal = document.getElementById('opacity-val');
+
+  let chartImageDataUrl = null;
+  let chartOverlay = null;
+  let pickingCorner = null; // 'tl' | 'tr' | 'bl' | null
+
+  chartToggle.addEventListener('click', () => {
+    chartPanel.classList.toggle('open');
+  });
+  document.getElementById('chart-panel-close').addEventListener('click', () => {
+    chartPanel.classList.remove('open');
+    stopPicking();
+  });
+
+  chartFileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      chartImageDataUrl = ev.target.result;
+      chartPreview.src = chartImageDataUrl;
+      chartPreview.style.display = 'block';
+      chartStatus.textContent = 'Photo loaded. Now set the three corner coordinates.';
+    };
+    reader.readAsDataURL(file);
+  });
+
+  document.querySelectorAll('.pick-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const corner = btn.dataset.corner;
+      if (pickingCorner === corner) {
+        stopPicking();
+      } else {
+        document.querySelectorAll('.pick-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        pickingCorner = corner;
+        chartStatus.textContent = 'Tap the map at the ' + cornerName(corner) + ' corner location...';
+      }
+    });
+  });
+
+  function cornerName(c) {
+    return c === 'tl' ? 'top-left' : c === 'tr' ? 'top-right' : 'bottom-left';
+  }
+
+  function stopPicking() {
+    pickingCorner = null;
+    document.querySelectorAll('.pick-btn').forEach(b => b.classList.remove('active'));
+  }
+
+  map.on('click', (e) => {
+    if (!pickingCorner) return;
+    const latInput = document.querySelector('.cp-lat[data-corner="' + pickingCorner + '"]');
+    const lonInput = document.querySelector('.cp-lon[data-corner="' + pickingCorner + '"]');
+    latInput.value = e.latlng.lat.toFixed(6);
+    lonInput.value = e.latlng.lng.toFixed(6);
+    chartStatus.textContent = cornerName(pickingCorner) + ' set.';
+    stopPicking();
+  });
+
+  opacitySlider.addEventListener('input', () => {
+    opacityVal.textContent = opacitySlider.value + '%';
+    if (chartOverlay) chartOverlay.setOpacity(opacitySlider.value / 100);
+  });
+
+  document.getElementById('chart-apply').addEventListener('click', () => {
+    if (!chartImageDataUrl) {
+      chartStatus.textContent = 'Load a photo first.';
+      return;
+    }
+    const tl = readCorner('tl'), tr = readCorner('tr'), bl = readCorner('bl');
+    if (!tl || !tr || !bl) {
+      chartStatus.textContent = 'Fill in all three corner coordinates.';
+      return;
+    }
+    if (chartOverlay) {
+      map.removeLayer(chartOverlay);
+      chartOverlay = null;
+    }
+    chartOverlay = L.imageOverlay.rotated(chartImageDataUrl, tl, tr, bl, {
+      opacity: opacitySlider.value / 100,
+      interactive: false
+    }).addTo(map);
+    map.fitBounds(L.latLngBounds([tl, tr, bl]));
+    chartStatus.textContent = 'Chart placed. Adjust opacity above, or re-pick a corner to fine-tune.';
+  });
+
+  document.getElementById('chart-remove').addEventListener('click', () => {
+    if (chartOverlay) {
+      map.removeLayer(chartOverlay);
+      chartOverlay = null;
+      chartStatus.textContent = 'Chart removed.';
+    }
+  });
+
+  function readCorner(c) {
+    const lat = parseFloat(document.querySelector('.cp-lat[data-corner="' + c + '"]').value);
+    const lon = parseFloat(document.querySelector('.cp-lon[data-corner="' + c + '"]').value);
+    if (isNaN(lat) || isNaN(lon)) return null;
+    return L.latLng(lat, lon);
+  }
 </script>
 </body>
 </html>
