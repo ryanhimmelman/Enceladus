@@ -134,6 +134,27 @@
     map.fitBounds(L.latLngBounds([CHART_TOPLEFT, CHART_TOPRIGHT, CHART_BOTTOMLEFT]));
   }
 
+  // ---------- Small photo marker (house-scale) ----------
+  // Placed as a simple square image overlay, sized to roughly a house
+  // footprint (~15m x 15m) centered on the given coordinates.
+  const PHOTO2_ENABLED = true;
+  const PHOTO2_IMAGE = 'e412c3178725962ee0aeccee4992ec7d.jpeg';
+  const PHOTO2_CENTER = [44.64706, -63.61644]; // [lat, lon]
+  const PHOTO2_WIDTH_M = 12;   // approx house-scale, portrait iPhone photo ratio (3:4)
+  const PHOTO2_HEIGHT_M = 16;
+
+  if (PHOTO2_ENABLED) {
+    const latPerM = 1 / 111320;
+    const lonPerM = 1 / (111320 * Math.cos(PHOTO2_CENTER[0] * Math.PI / 180));
+    const halfLat = (PHOTO2_HEIGHT_M / 2) * latPerM;
+    const halfLon = (PHOTO2_WIDTH_M / 2) * lonPerM;
+    const photo2Bounds = [
+      [PHOTO2_CENTER[0] - halfLat, PHOTO2_CENTER[1] - halfLon],
+      [PHOTO2_CENTER[0] + halfLat, PHOTO2_CENTER[1] + halfLon]
+    ];
+    L.imageOverlay(PHOTO2_IMAGE, photo2Bounds, { interactive: false }).addTo(map);
+  }
+
   // Vessel marker (rotates with heading)
   const boatIcon = L.divIcon({
     className: 'boat-icon',
