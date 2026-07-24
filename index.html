@@ -92,17 +92,17 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/gh/IvanSanchez/Leaflet.ImageOverlay.Rotated@gh-pages/Leaflet.ImageOverlay.Rotated.js"></script>
 <script>
-  const map = L.map('map', { zoomControl: true, attributionControl: true, maxZoom: 24 }).setView([37.8, -122.4], 12);
+  const map = L.map('map', { zoomControl: true, attributionControl: true, maxZoom: 50 }).setView([37.8, -122.4], 12);
 
   const osmBase = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap contributors',
-    maxZoom: 24,
+    maxZoom: 50,
     maxNativeZoom: 19
   }).addTo(map);
 
   const esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     attribution: 'Tiles &copy; Esri',
-    maxZoom: 24,
+    maxZoom: 50,
     maxNativeZoom: 19
   });
 
