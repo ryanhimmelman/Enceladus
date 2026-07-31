@@ -21,7 +21,9 @@
     --amber: #ffb648;
   }
   html, body { margin: 0; padding: 0; height: 100%; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--deep); }
-  #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+  #map-wrap { position: absolute; top: 0; bottom: 0; width: 100%; overflow: hidden; }
+  #map { position: absolute; top: 0; bottom: 0; width: 100%; transform-origin: 50% 50%; transition: transform 0.35s ease; }
+  .leaflet-control-container { transition: transform 0.35s ease; transform-origin: 50% 50%; }
   .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 
   #hud {
@@ -184,6 +186,7 @@
   </div>
   <div id="hud-readouts">
     <div class="readout"><span class="r-label">Speed</span><span class="r-value mono" id="speed-text">&mdash;<span class="unit">kn</span></span></div>
+    <div class="readout"><span class="r-label">COG</span><span class="r-value mono" id="cog-text">&mdash;<span class="unit">&deg;</span></span></div>
     <div class="readout"><span class="r-label">Mag Hdg</span><span class="r-value mono" id="heading-text">&mdash;<span class="unit">&deg;</span></span></div>
     <div class="readout"><span class="r-label">Accuracy</span><span class="r-value mono" id="acc-text">&mdash;<span class="unit">m</span></span></div>
   </div>
@@ -192,12 +195,13 @@
 </div>
 
 <div id="err-banner"></div>
-<div id="map"></div>
+<div id="map-wrap"><div id="map"></div></div>
 
 <div id="controls">
   <button class="ctrl-btn active" id="track-toggle"><span class="ico">&#9679;</span>Live Tracking</button>
   <button class="ctrl-btn" id="center-btn"><span class="ico">&#8982;</span>Find Ship</button>
   <button class="ctrl-btn" id="waypoint-btn"><span class="ico">&#9873;</span>Add Waypoint</button>
+  <button class="ctrl-btn" id="orient-btn"><span class="ico">&#8598;</span>North Up</button>
   <button class="ctrl-btn" id="clear-btn"><span class="ico">&#10005;</span>Clear Trail</button>
 </div>
 
@@ -285,6 +289,9 @@
   let tracking = true;
   let firstFix = true;
   let lastHeading = 0;
+  let lastCOG = null;
+  let lastFixLatLng = null;
+  let orientMode = 'north'; // 'north' | 'course' | 'heading'
 
   function knots(mps) { return mps == null ? null : mps * 1.94384; }
 
@@ -332,9 +339,25 @@
     trail.setLatLngs(trailPoints);
     renderWaypointBar();
 
+    // Course over ground: bearing between successive fixes. Ignored below
+    // a small movement threshold to avoid GPS-noise jitter while stationary.
+    if (lastFixLatLng) {
+      const movedM = distanceNm(lastFixLatLng.lat, lastFixLatLng.lng, latitude, longitude) * 1852;
+      if (movedM > 3) {
+        lastCOG = bearingDeg(lastFixLatLng.lat, lastFixLatLng.lng, latitude, longitude);
+        lastFixLatLng = { lat: latitude, lng: longitude };
+        document.getElementById('cog-text').innerHTML = Math.round(lastCOG) + '<span class="unit">&deg;</span>';
+        if (orientMode === 'course') applyMapRotation();
+      }
+    } else {
+      lastFixLatLng = { lat: latitude, lng: longitude };
+    }
+
     if (firstFix) {
       map.setView(latlng, 16);
       firstFix = false;
+    } else if (orientMode !== 'north') {
+      map.setView(latlng, map.getZoom(), { animate: false });
     }
   }
 
@@ -387,6 +410,39 @@
   document.getElementById('clear-btn').addEventListener('click', function() {
     trailPoints = [];
     trail.setLatLngs([]);
+  });
+
+  // ---------- Orientation mode: North Up / Course Up / Heading Up ----------
+  const orientBtn = document.getElementById('orient-btn');
+  const controlContainerEl = document.querySelector('.leaflet-control-container');
+  const ORIENT_MODES = [
+    { key: 'north', label: 'North Up', ico: '&#8598;' },
+    { key: 'course', label: 'Course Up', ico: '&#10148;' },
+    { key: 'heading', label: 'Heading Up', ico: '&#9973;' }
+  ];
+
+  function applyMapRotation() {
+    let angle = 0;
+    if (orientMode === 'course' && lastCOG != null) angle = -lastCOG;
+    else if (orientMode === 'heading') angle = -lastHeading;
+    map.getContainer().style.transform = 'rotate(' + angle + 'deg)';
+    if (controlContainerEl) controlContainerEl.style.transform = 'rotate(' + (-angle) + 'deg)';
+  }
+
+  orientBtn.addEventListener('click', () => {
+    const idx = ORIENT_MODES.findIndex(m => m.key === orientMode);
+    const next = ORIENT_MODES[(idx + 1) % ORIENT_MODES.length];
+    orientMode = next.key;
+    orientBtn.innerHTML = '<span class="ico">' + next.ico + '</span>' + next.label;
+    orientBtn.classList.toggle('active', orientMode !== 'north');
+
+    if (orientMode === 'north') {
+      map.dragging.enable();
+    } else {
+      map.dragging.disable();
+      if (marker) map.setView(marker.getLatLng(), map.getZoom(), { animate: false });
+    }
+    applyMapRotation();
   });
 
   // ---------- Waypoints: course & distance from current position ----------
@@ -505,6 +561,7 @@
     document.getElementById('heading-text').innerHTML = Math.round(heading) + '<span class="unit">&deg;</span>';
     const arrow = document.getElementById('boat-arrow');
     if (arrow) arrow.style.transform = 'rotate(' + heading + 'deg)';
+    if (orientMode === 'heading') applyMapRotation();
   }
 
   function startCompass() {
