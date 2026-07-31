@@ -143,6 +143,42 @@
   }
   .rt-chip .rt-label { font-weight: 700; opacity: 0.85; }
   .rt-chip .rt-remove { color: var(--ink-dim); cursor: pointer; font-family: 'Inter', sans-serif; padding-left: 2px; }
+  .rt-chip.rt-total { background: rgba(255, 182, 72, 0.08); border-color: rgba(255, 182, 72, 0.35); color: var(--amber); }
+
+  #routes-panel {
+    display: none;
+    position: absolute;
+    bottom: 20px; left: 12px; right: 12px;
+    max-width: 380px;
+    z-index: 1100;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 12px;
+    color: var(--ink);
+    font-size: 12.5px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    max-height: 60vh;
+    overflow-y: auto;
+    backdrop-filter: blur(6px);
+  }
+  #routes-panel.open { display: block; }
+  #routes-panel-header { display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 14px; margin-bottom: 10px; }
+  #routes-panel-close { background: none; border: none; color: var(--ink); font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px; }
+  .saved-route-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 8px 4px;
+    border-top: 1px solid var(--hairline);
+  }
+  .saved-route-row:first-child { border-top: none; }
+  .saved-route-name { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; }
+  .saved-route-actions { display: flex; gap: 6px; }
+  .saved-route-actions button {
+    background: rgba(255,255,255,0.04); color: var(--ink); border: 1px solid var(--panel-border);
+    border-radius: 6px; padding: 4px 8px; font-size: 11px; cursor: pointer;
+  }
+  .saved-route-actions button.danger { color: var(--port); border-color: rgba(255,106,82,0.4); }
+  #routes-empty { color: var(--ink-dim); font-size: 12px; padding: 4px; }
 
   #controls {
     position: absolute;
@@ -253,7 +289,18 @@
   <button class="ctrl-btn" id="center-btn"><span class="ico">&#8982;</span>Find Ship</button>
   <button class="ctrl-btn" id="waypoint-btn"><span class="ico">&#9873;</span>Add Waypoint</button>
   <button class="ctrl-btn" id="route-btn"><span class="ico">&#8618;</span>Add Route</button>
+  <button class="ctrl-btn" id="save-route-btn"><span class="ico">&#128190;</span>Save Route</button>
+  <button class="ctrl-btn" id="routes-btn"><span class="ico">&#128193;</span>Routes</button>
+  <button class="ctrl-btn" id="delete-route-btn"><span class="ico">&#10005;</span>Delete Route</button>
   <button class="ctrl-btn" id="clear-btn"><span class="ico">&#10005;</span>Clear Trail</button>
+</div>
+
+<div id="routes-panel">
+  <div id="routes-panel-header">
+    <span>Saved Routes</span>
+    <button id="routes-panel-close">&times;</button>
+  </div>
+  <div id="routes-list"></div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -596,6 +643,9 @@
     routePoints.forEach(rp => legPoints.push(rp.latlng));
     routeLine.setLatLngs(legPoints);
 
+    let totalNm = 0;
+    let totalKnown = true;
+
     routePoints.forEach((rp, i) => {
       const from = i === 0 ? (marker ? marker.getLatLng() : null) : routePoints[i - 1].latlng;
       const fromLabel = i === 0 ? 'V' : routePoints[i - 1].label;
@@ -605,12 +655,22 @@
         const trueBrg = bearingDeg(from.lat, from.lng, rp.latlng.lat, rp.latlng.lng);
         const magBrg = trueToMagnetic(trueBrg);
         text = dist.toFixed(2) + ' nm @ ' + Math.round(magBrg) + '&deg; M';
+        totalNm += dist;
+      } else {
+        totalKnown = false;
       }
       const chip = document.createElement('div');
       chip.className = 'rt-chip';
       chip.innerHTML = '<span class="rt-label">' + fromLabel + '&rarr;' + rp.label + '</span><span>' + text + '</span><span class="rt-remove" data-id="' + rp.id + '">&times;</span>';
       routeBar.appendChild(chip);
     });
+
+    if (routePoints.length > 0) {
+      const totalChip = document.createElement('div');
+      totalChip.className = 'rt-chip rt-total';
+      totalChip.innerHTML = '<span class="rt-label">Total</span><span>' + (totalKnown ? totalNm.toFixed(2) + ' nm' : '&mdash; nm') + '</span>';
+      routeBar.appendChild(totalChip);
+    }
 
     routeBar.querySelectorAll('.rt-remove').forEach(el => {
       el.addEventListener('click', () => removeRoutePoint(Number(el.dataset.id)));
@@ -648,7 +708,112 @@
     addRoutePoint(e.latlng);
   });
 
+  // ---------- Delete active route (resets numbering back to R1) ----------
+  function deleteActiveRoute() {
+    routePoints.forEach(rp => map.removeLayer(rp.marker));
+    routePoints = [];
+    routeCounter = 0;
+    routeLine.setLatLngs([]);
+    renderRouteBar();
+  }
+
+  document.getElementById('delete-route-btn').addEventListener('click', () => {
+    if (routePoints.length === 0) return;
+    if (confirm('Delete the current route? This clears all route points.')) {
+      deleteActiveRoute();
+    }
+  });
+
+  // ---------- Save / load named routes (stored in this browser only) ----------
+  const SAVED_ROUTES_KEY = 'chartPlotterSavedRoutes';
+
+  function getSavedRoutes() {
+    try {
+      return JSON.parse(localStorage.getItem(SAVED_ROUTES_KEY) || '[]');
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function setSavedRoutes(routes) {
+    try {
+      localStorage.setItem(SAVED_ROUTES_KEY, JSON.stringify(routes));
+    } catch (e) {
+      alert('Could not save route (browser storage unavailable).');
+    }
+  }
+
+  document.getElementById('save-route-btn').addEventListener('click', () => {
+    if (routePoints.length === 0) {
+      alert('Add at least one route point before saving.');
+      return;
+    }
+    const name = prompt('Name this route:', 'Route ' + (getSavedRoutes().length + 1));
+    if (!name) return;
+    const routes = getSavedRoutes();
+    routes.push({
+      name,
+      savedAt: new Date().toISOString(),
+      points: routePoints.map(rp => ({ lat: rp.latlng.lat, lon: rp.latlng.lng }))
+    });
+    setSavedRoutes(routes);
+    renderRoutesList();
+  });
+
+  const routesPanel = document.getElementById('routes-panel');
+  const routesList = document.getElementById('routes-list');
+
+  function renderRoutesList() {
+    const routes = getSavedRoutes();
+    routesList.innerHTML = '';
+    if (routes.length === 0) {
+      routesList.innerHTML = '<div id="routes-empty">No saved routes yet.</div>';
+      return;
+    }
+    routes.forEach((r, idx) => {
+      const row = document.createElement('div');
+      row.className = 'saved-route-row';
+      row.innerHTML =
+        '<span class="saved-route-name">' + r.name + ' <span style="color:var(--ink-dim)">(' + r.points.length + ' pts)</span></span>' +
+        '<span class="saved-route-actions"><button data-action="load" data-idx="' + idx + '">Load</button>' +
+        '<button data-action="delete" data-idx="' + idx + '" class="danger">Delete</button></span>';
+      routesList.appendChild(row);
+    });
+    routesList.querySelectorAll('button[data-action="load"]').forEach(btn => {
+      btn.addEventListener('click', () => loadSavedRoute(Number(btn.dataset.idx)));
+    });
+    routesList.querySelectorAll('button[data-action="delete"]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const routes = getSavedRoutes();
+        if (confirm('Delete saved route "' + routes[Number(btn.dataset.idx)].name + '"?')) {
+          routes.splice(Number(btn.dataset.idx), 1);
+          setSavedRoutes(routes);
+          renderRoutesList();
+        }
+      });
+    });
+  }
+
+  function loadSavedRoute(idx) {
+    const routes = getSavedRoutes();
+    const r = routes[idx];
+    if (!r) return;
+    if (routePoints.length > 0 && !confirm('Replace the current route with "' + r.name + '"?')) return;
+    deleteActiveRoute();
+    r.points.forEach(p => addRoutePoint(L.latLng(p.lat, p.lon)));
+    routesPanel.classList.remove('open');
+  }
+
+  document.getElementById('routes-btn').addEventListener('click', () => {
+    renderRoutesList();
+    routesPanel.classList.toggle('open');
+  });
+  document.getElementById('routes-panel-close').addEventListener('click', () => {
+    routesPanel.classList.remove('open');
+  });
+
   startTracking();
+
 
   // ---------- Magnetic compass heading ----------
   // iOS exposes webkitCompassHeading directly (already magnetic north).
