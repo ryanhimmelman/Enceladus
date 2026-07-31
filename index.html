@@ -93,6 +93,31 @@
     opacity: 0.75;
   }
 
+  #waypoint-bar {
+    display: none;
+    gap: 6px;
+    margin-top: 8px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+  #waypoint-bar.show { display: flex; }
+  .wp-chip {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(255, 182, 72, 0.08);
+    border: 1px solid rgba(255, 182, 72, 0.35);
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--amber);
+    white-space: nowrap;
+  }
+  .wp-chip .wp-label { font-weight: 700; opacity: 0.85; }
+  .wp-chip .wp-remove { color: var(--ink-dim); cursor: pointer; font-family: 'Inter', sans-serif; padding-left: 2px; }
+
   #controls {
     position: absolute;
     bottom: 20px; right: 12px;
@@ -145,19 +170,6 @@
   .leaflet-control-layers-expanded { color: var(--ink) !important; font-size: 12.5px; }
   .leaflet-top.leaflet-right { top: 92px !important; }
 
-  .waypoint-tooltip {
-    background: var(--panel) !important;
-    color: var(--amber) !important;
-    border: 1px solid var(--panel-border) !important;
-    border-radius: 6px !important;
-    font-family: 'JetBrains Mono', ui-monospace, monospace !important;
-    font-size: 11px !important;
-    font-weight: 600 !important;
-    padding: 3px 7px !important;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.4) !important;
-  }
-  .waypoint-tooltip::before { border-right-color: var(--panel-border) !important; }
-
 </style>
 </head>
 <body>
@@ -172,10 +184,11 @@
   </div>
   <div id="hud-readouts">
     <div class="readout"><span class="r-label">Speed</span><span class="r-value mono" id="speed-text">&mdash;<span class="unit">kn</span></span></div>
-    <div class="readout"><span class="r-label">COG</span><span class="r-value mono" id="heading-text">&mdash;<span class="unit">&deg;</span></span></div>
+    <div class="readout"><span class="r-label">Mag Hdg</span><span class="r-value mono" id="heading-text">&mdash;<span class="unit">&deg;</span></span></div>
     <div class="readout"><span class="r-label">Accuracy</span><span class="r-value mono" id="acc-text">&mdash;<span class="unit">m</span></span></div>
   </div>
   <div id="pos-line" class="mono">Lat / Lon &mdash;</div>
+  <div id="waypoint-bar"></div>
 </div>
 
 <div id="err-banner"></div>
@@ -291,7 +304,7 @@
 
   function onPosition(pos) {
     hideError();
-    const { latitude, longitude, accuracy, speed, heading } = pos.coords;
+    const { latitude, longitude, accuracy, speed } = pos.coords;
 
     setStatus(true, 'Live');
     document.getElementById('pos-line').textContent = 'Lat / Lon ' + latitude.toFixed(5) + ', ' + longitude.toFixed(5);
@@ -299,13 +312,6 @@
 
     const kn = knots(speed);
     document.getElementById('speed-text').innerHTML = (kn != null && !isNaN(kn)) ? kn.toFixed(1) + '<span class="unit">kn</span>' : '&mdash;<span class="unit">kn</span>';
-
-    if (heading != null && !isNaN(heading)) {
-      lastHeading = heading;
-      document.getElementById('heading-text').innerHTML = Math.round(heading) + '<span class="unit">&deg;</span>';
-      const arrow = document.getElementById('boat-arrow');
-      if (arrow) arrow.style.transform = 'rotate(' + heading + 'deg)';
-    }
 
     const latlng = [latitude, longitude];
 
@@ -324,7 +330,7 @@
 
     trailPoints.push(latlng);
     trail.setLatLngs(trailPoints);
-    updateAllWaypointTooltips();
+    renderWaypointBar();
 
     if (firstFix) {
       map.setView(latlng, 16);
@@ -391,12 +397,25 @@
     iconAnchor: [7, 14]
   });
 
-  let waypoints = []; // { id, latlng, marker }
+  let waypoints = []; // { id, latlng, marker, label }
+  let waypointCounter = 0;
   let waypointPicking = false;
   const waypointBtn = document.getElementById('waypoint-btn');
+  const waypointBar = document.getElementById('waypoint-bar');
 
   function toRad(d) { return d * Math.PI / 180; }
   function toDeg(r) { return r * 180 / Math.PI; }
+
+  // Local magnetic declination (variation), degrees, EAST POSITIVE / WEST NEGATIVE.
+  // Set from NOAA/NRCan for your area — declination drifts slowly (well under
+  // 1°/year in most places), so a value set once stays accurate a long time.
+  // Default below is approx. for Nova Scotia (~16.1° W). Update if you cruise
+  // somewhere else. Magnetic course = True course - Declination.
+  const DECLINATION_DEG = -16.1;
+
+  function trueToMagnetic(trueBearing) {
+    return (trueBearing - DECLINATION_DEG + 360) % 360;
+  }
 
   function distanceNm(lat1, lon1, lat2, lon2) {
     const R = 3440.065; // nautical miles
@@ -412,35 +431,43 @@
     return (toDeg(Math.atan2(y, x)) + 360) % 360;
   }
 
-  function waypointTooltipText(wp) {
-    if (!marker) return 'No ship fix yet';
-    const shipLatLng = marker.getLatLng();
-    const dist = distanceNm(shipLatLng.lat, shipLatLng.lng, wp.latlng.lat, wp.latlng.lng);
-    const brg = bearingDeg(shipLatLng.lat, shipLatLng.lng, wp.latlng.lat, wp.latlng.lng);
-    return dist.toFixed(2) + ' nm @ ' + Math.round(brg) + '\u00B0';
+  function renderWaypointBar() {
+    waypointBar.innerHTML = '';
+    waypointBar.classList.toggle('show', waypoints.length > 0);
+    waypoints.forEach(wp => {
+      const chip = document.createElement('div');
+      chip.className = 'wp-chip';
+      let text = '&mdash; nm @ &mdash;&deg; M';
+      if (marker) {
+        const s = marker.getLatLng();
+        const dist = distanceNm(s.lat, s.lng, wp.latlng.lat, wp.latlng.lng);
+        const trueBrg = bearingDeg(s.lat, s.lng, wp.latlng.lat, wp.latlng.lng);
+        const magBrg = trueToMagnetic(trueBrg);
+        text = dist.toFixed(2) + ' nm @ ' + Math.round(magBrg) + '&deg; M';
+      }
+      chip.innerHTML = '<span class="wp-label">' + wp.label + '</span><span>' + text + '</span><span class="wp-remove" data-id="' + wp.id + '">&times;</span>';
+      waypointBar.appendChild(chip);
+    });
+    waypointBar.querySelectorAll('.wp-remove').forEach(el => {
+      el.addEventListener('click', () => removeWaypoint(Number(el.dataset.id)));
+    });
   }
 
-  function updateAllWaypointTooltips() {
-    waypoints.forEach(wp => wp.marker.setTooltipContent(waypointTooltipText(wp)));
+  function removeWaypoint(id) {
+    const wp = waypoints.find(w => w.id === id);
+    if (wp) map.removeLayer(wp.marker);
+    waypoints = waypoints.filter(w => w.id !== id);
+    renderWaypointBar();
   }
 
   function addWaypoint(latlng) {
+    waypointCounter++;
     const id = Date.now();
+    const label = 'WP' + waypointCounter;
     const m = L.marker(latlng, { icon: waypointIcon }).addTo(map);
-    const wp = { id, latlng, marker: m };
-    m.bindTooltip(waypointTooltipText(wp), {
-      permanent: true,
-      direction: 'right',
-      offset: [4, -8],
-      className: 'waypoint-tooltip'
-    });
-    m.on('click', () => {
-      if (confirm('Remove this waypoint?')) {
-        map.removeLayer(m);
-        waypoints = waypoints.filter(w => w.id !== id);
-      }
-    });
-    waypoints.push(wp);
+    m.on('click', () => { if (confirm('Remove ' + label + '?')) removeWaypoint(id); });
+    waypoints.push({ id, latlng, marker: m, label });
+    renderWaypointBar();
   }
 
   waypointBtn.addEventListener('click', () => {
@@ -460,6 +487,54 @@
   });
 
   startTracking();
+
+  // ---------- Magnetic compass heading ----------
+  // iOS exposes webkitCompassHeading directly (already magnetic north).
+  // Other browsers expose event.alpha via 'deviceorientationabsolute' (or
+  // 'deviceorientation' with event.absolute === true); alpha counts
+  // counter-clockwise from device's initial orientation, so we convert.
+  function handleOrientation(event) {
+    let heading = null;
+    if (typeof event.webkitCompassHeading === 'number') {
+      heading = event.webkitCompassHeading; // already magnetic, 0=N, clockwise
+    } else if (event.alpha != null && (event.absolute === true || event.type === 'deviceorientationabsolute')) {
+      heading = (360 - event.alpha) % 360;
+    }
+    if (heading == null || isNaN(heading)) return;
+    lastHeading = heading;
+    document.getElementById('heading-text').innerHTML = Math.round(heading) + '<span class="unit">&deg;</span>';
+    const arrow = document.getElementById('boat-arrow');
+    if (arrow) arrow.style.transform = 'rotate(' + heading + 'deg)';
+  }
+
+  function startCompass() {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      // iOS 13+: must be triggered by a user gesture.
+      DeviceOrientationEvent.requestPermission().then(state => {
+        if (state === 'granted') {
+          window.addEventListener('deviceorientation', handleOrientation, true);
+        } else {
+          showError('Compass access denied. Enable motion & orientation access in Settings > Safari.');
+        }
+      }).catch(() => {
+        showError('Could not access the compass on this device.');
+      });
+    } else if ('ondeviceorientationabsolute' in window) {
+      window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+    } else if (typeof DeviceOrientationEvent !== 'undefined') {
+      window.addEventListener('deviceorientation', handleOrientation, true);
+    } else {
+      showError('This browser does not support compass heading.');
+    }
+  }
+
+  // iOS requires a user gesture to request sensor permission, so trigger
+  // on first tap anywhere on the page.
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    document.body.addEventListener('click', startCompass, { once: true });
+  } else {
+    startCompass();
+  }
 
 </script>
 </body>
