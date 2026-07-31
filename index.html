@@ -22,8 +22,7 @@
   }
   html, body { margin: 0; padding: 0; height: 100%; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--deep); }
   #map-wrap { position: absolute; top: 0; bottom: 0; width: 100%; overflow: hidden; }
-  #map { position: absolute; top: 0; bottom: 0; width: 100%; transform-origin: 50% 50%; transition: transform 0.35s ease; }
-  .leaflet-control-container { transition: transform 0.35s ease; transform-origin: 50% 50%; }
+  #map { position: absolute; top: 0; bottom: 0; width: 100%; }
   .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 
   #hud {
@@ -120,6 +119,31 @@
   .wp-chip .wp-label { font-weight: 700; opacity: 0.85; }
   .wp-chip .wp-remove { color: var(--ink-dim); cursor: pointer; font-family: 'Inter', sans-serif; padding-left: 2px; }
 
+  #route-bar {
+    display: none;
+    gap: 6px;
+    margin-top: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+  #route-bar.show { display: flex; }
+  .rt-chip {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(53, 208, 127, 0.08);
+    border: 1px solid rgba(53, 208, 127, 0.35);
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--starboard);
+    white-space: nowrap;
+  }
+  .rt-chip .rt-label { font-weight: 700; opacity: 0.85; }
+  .rt-chip .rt-remove { color: var(--ink-dim); cursor: pointer; font-family: 'Inter', sans-serif; padding-left: 2px; }
+
   #controls {
     position: absolute;
     bottom: 20px; right: 12px;
@@ -127,7 +151,31 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+    transition: opacity 0.2s ease, transform 0.2s ease;
   }
+  #controls.collapsed {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(6px);
+  }
+  #controls-min-btn {
+    position: absolute;
+    bottom: 20px; right: 12px;
+    z-index: 1001;
+    width: 34px; height: 34px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: var(--panel);
+    color: var(--ink);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    font-size: 16px;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.45);
+    backdrop-filter: blur(6px);
+    cursor: pointer;
+  }
+  #controls-min-btn.show { display: flex; }
   .ctrl-btn {
     display: flex; align-items: center; gap: 7px;
     background: var(--panel);
@@ -192,16 +240,19 @@
   </div>
   <div id="pos-line" class="mono">Lat / Lon &mdash;</div>
   <div id="waypoint-bar"></div>
+  <div id="route-bar"></div>
 </div>
 
 <div id="err-banner"></div>
 <div id="map-wrap"><div id="map"></div></div>
 
+<button id="controls-min-btn">&#8942;</button>
 <div id="controls">
+  <button class="ctrl-btn" id="controls-collapse-btn"><span class="ico">&#8944;</span>Minimize</button>
   <button class="ctrl-btn active" id="track-toggle"><span class="ico">&#9679;</span>Live Tracking</button>
   <button class="ctrl-btn" id="center-btn"><span class="ico">&#8982;</span>Find Ship</button>
   <button class="ctrl-btn" id="waypoint-btn"><span class="ico">&#9873;</span>Add Waypoint</button>
-  <button class="ctrl-btn" id="orient-btn"><span class="ico">&#8598;</span>North Up</button>
+  <button class="ctrl-btn" id="route-btn"><span class="ico">&#8618;</span>Add Route</button>
   <button class="ctrl-btn" id="clear-btn"><span class="ico">&#10005;</span>Clear Trail</button>
 </div>
 
@@ -291,7 +342,6 @@
   let lastHeading = 0;
   let lastCOG = null;
   let lastFixLatLng = null;
-  let orientMode = 'north'; // 'north' | 'course' | 'heading'
 
   function knots(mps) { return mps == null ? null : mps * 1.94384; }
 
@@ -338,6 +388,7 @@
     trailPoints.push(latlng);
     trail.setLatLngs(trailPoints);
     renderWaypointBar();
+    renderRouteBar();
 
     // Course over ground: bearing between successive fixes. Ignored below
     // a small movement threshold to avoid GPS-noise jitter while stationary.
@@ -347,7 +398,6 @@
         lastCOG = bearingDeg(lastFixLatLng.lat, lastFixLatLng.lng, latitude, longitude);
         lastFixLatLng = { lat: latitude, lng: longitude };
         document.getElementById('cog-text').innerHTML = Math.round(lastCOG) + '<span class="unit">&deg;</span>';
-        if (orientMode === 'course') applyMapRotation();
       }
     } else {
       lastFixLatLng = { lat: latitude, lng: longitude };
@@ -356,8 +406,6 @@
     if (firstFix) {
       map.setView(latlng, 16);
       firstFix = false;
-    } else if (orientMode !== 'north') {
-      map.setView(latlng, map.getZoom(), { animate: false });
     }
   }
 
@@ -412,38 +460,18 @@
     trail.setLatLngs([]);
   });
 
-  // ---------- Orientation mode: North Up / Course Up / Heading Up ----------
-  const orientBtn = document.getElementById('orient-btn');
-  const controlContainerEl = document.querySelector('.leaflet-control-container');
-  const ORIENT_MODES = [
-    { key: 'north', label: 'North Up', ico: '&#8598;' },
-    { key: 'course', label: 'Course Up', ico: '&#10148;' },
-    { key: 'heading', label: 'Heading Up', ico: '&#9973;' }
-  ];
-
-  function applyMapRotation() {
-    let angle = 0;
-    if (orientMode === 'course' && lastCOG != null) angle = -lastCOG;
-    else if (orientMode === 'heading') angle = -lastHeading;
-    map.getContainer().style.transform = 'rotate(' + angle + 'deg)';
-    if (controlContainerEl) controlContainerEl.style.transform = 'rotate(' + (-angle) + 'deg)';
-  }
-
-  orientBtn.addEventListener('click', () => {
-    const idx = ORIENT_MODES.findIndex(m => m.key === orientMode);
-    const next = ORIENT_MODES[(idx + 1) % ORIENT_MODES.length];
-    orientMode = next.key;
-    orientBtn.innerHTML = '<span class="ico">' + next.ico + '</span>' + next.label;
-    orientBtn.classList.toggle('active', orientMode !== 'north');
-
-    if (orientMode === 'north') {
-      map.dragging.enable();
-    } else {
-      map.dragging.disable();
-      if (marker) map.setView(marker.getLatLng(), map.getZoom(), { animate: false });
-    }
-    applyMapRotation();
+  // ---------- Minimize control stack ----------
+  const controlsEl = document.getElementById('controls');
+  const controlsMinBtn = document.getElementById('controls-min-btn');
+  document.getElementById('controls-collapse-btn').addEventListener('click', () => {
+    controlsEl.classList.add('collapsed');
+    controlsMinBtn.classList.add('show');
   });
+  controlsMinBtn.addEventListener('click', () => {
+    controlsEl.classList.remove('collapsed');
+    controlsMinBtn.classList.remove('show');
+  });
+
 
   // ---------- Waypoints: course & distance from current position ----------
   const waypointIcon = L.divIcon({
@@ -527,6 +555,7 @@
   }
 
   waypointBtn.addEventListener('click', () => {
+    if (routePicking) { routePicking = false; routeBtn.classList.remove('active'); routeBtn.innerHTML = '<span class="ico">&#8618;</span>Add Route'; }
     waypointPicking = !waypointPicking;
     waypointBtn.classList.toggle('active', waypointPicking);
     waypointBtn.innerHTML = waypointPicking
@@ -540,6 +569,83 @@
     waypointPicking = false;
     waypointBtn.classList.remove('active');
     waypointBtn.innerHTML = '<span class="ico">&#9873;</span>Add Waypoint';
+  });
+
+  // ---------- Route: ordered points, connected leg by leg ----------
+  const routeIcon = L.divIcon({
+    className: 'route-icon',
+    html: `<div style="width:12px;height:12px;background:#35d07f;border:2px solid #071019;border-radius:50%;box-shadow:0 0 4px rgba(0,0,0,0.5);"></div>`,
+    iconSize: [12, 12],
+    iconAnchor: [6, 6]
+  });
+
+  let routePoints = []; // { id, latlng, marker }
+  let routeCounter = 0;
+  let routePicking = false;
+  const routeBtn = document.getElementById('route-btn');
+  const routeBar = document.getElementById('route-bar');
+  const routeLine = L.polyline([], { color: '#35d07f', weight: 2.5, opacity: 0.85, dashArray: '2 7' }).addTo(map);
+
+  function renderRouteBar() {
+    routeBar.innerHTML = '';
+    routeBar.classList.toggle('show', routePoints.length > 0);
+
+    // Leg 1: vessel -> first route point (if we have a ship fix)
+    const legPoints = [];
+    if (marker && routePoints.length > 0) legPoints.push(marker.getLatLng());
+    routePoints.forEach(rp => legPoints.push(rp.latlng));
+    routeLine.setLatLngs(legPoints);
+
+    routePoints.forEach((rp, i) => {
+      const from = i === 0 ? (marker ? marker.getLatLng() : null) : routePoints[i - 1].latlng;
+      const fromLabel = i === 0 ? 'V' : routePoints[i - 1].label;
+      let text = '&mdash; nm @ &mdash;&deg; M';
+      if (from) {
+        const dist = distanceNm(from.lat, from.lng, rp.latlng.lat, rp.latlng.lng);
+        const trueBrg = bearingDeg(from.lat, from.lng, rp.latlng.lat, rp.latlng.lng);
+        const magBrg = trueToMagnetic(trueBrg);
+        text = dist.toFixed(2) + ' nm @ ' + Math.round(magBrg) + '&deg; M';
+      }
+      const chip = document.createElement('div');
+      chip.className = 'rt-chip';
+      chip.innerHTML = '<span class="rt-label">' + fromLabel + '&rarr;' + rp.label + '</span><span>' + text + '</span><span class="rt-remove" data-id="' + rp.id + '">&times;</span>';
+      routeBar.appendChild(chip);
+    });
+
+    routeBar.querySelectorAll('.rt-remove').forEach(el => {
+      el.addEventListener('click', () => removeRoutePoint(Number(el.dataset.id)));
+    });
+  }
+
+  function removeRoutePoint(id) {
+    const rp = routePoints.find(r => r.id === id);
+    if (rp) map.removeLayer(rp.marker);
+    routePoints = routePoints.filter(r => r.id !== id);
+    renderRouteBar();
+  }
+
+  function addRoutePoint(latlng) {
+    routeCounter++;
+    const id = Date.now() + Math.random();
+    const label = 'R' + routeCounter;
+    const m = L.marker(latlng, { icon: routeIcon }).addTo(map);
+    m.on('click', () => { if (confirm('Remove ' + label + ' from route?')) removeRoutePoint(id); });
+    routePoints.push({ id, latlng, marker: m, label });
+    renderRouteBar();
+  }
+
+  routeBtn.addEventListener('click', () => {
+    if (waypointPicking) { waypointPicking = false; waypointBtn.classList.remove('active'); waypointBtn.innerHTML = '<span class="ico">&#9873;</span>Add Waypoint'; }
+    routePicking = !routePicking;
+    routeBtn.classList.toggle('active', routePicking);
+    routeBtn.innerHTML = routePicking
+      ? '<span class="ico">&#8618;</span>Tap Map...'
+      : '<span class="ico">&#8618;</span>Add Route';
+  });
+
+  map.on('click', (e) => {
+    if (!routePicking) return;
+    addRoutePoint(e.latlng);
   });
 
   startTracking();
@@ -561,7 +667,6 @@
     document.getElementById('heading-text').innerHTML = Math.round(heading) + '<span class="unit">&deg;</span>';
     const arrow = document.getElementById('boat-arrow');
     if (arrow) arrow.style.transform = 'rotate(' + heading + 'deg)';
-    if (orientMode === 'heading') applyMapRotation();
   }
 
   function startCompass() {
