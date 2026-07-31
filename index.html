@@ -5,30 +5,93 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Chart Plotter</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a1622; }
+  :root {
+    --deep: #071019;
+    --panel: rgba(9, 20, 32, 0.9);
+    --panel-border: #17324a;
+    --hairline: rgba(111, 168, 208, 0.18);
+    --ink: #d7ecff;
+    --ink-dim: #6f92ab;
+    --starboard: #35d07f;
+    --port: #ff6a52;
+    --amber: #ffb648;
+  }
+  html, body { margin: 0; padding: 0; height: 100%; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--deep); }
   #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 
   #hud {
     position: absolute;
     top: 0; left: 0; right: 0;
     z-index: 1000;
-    background: rgba(10, 22, 34, 0.88);
-    color: #d7ecff;
-    padding: 10px 14px 8px 14px;
+    background: linear-gradient(180deg, rgba(7,16,25,0.96) 0%, rgba(7,16,25,0.88) 100%);
+    border-bottom: 1px solid var(--panel-border);
+    box-shadow: 0 1px 0 rgba(53, 208, 127, 0.15);
+    backdrop-filter: blur(6px);
+    padding: 9px 14px 8px 14px;
     box-sizing: border-box;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 13px;
-    border-bottom: 1px solid #1c3a52;
-    backdrop-filter: blur(4px);
   }
-  #hud .stats { display: flex; gap: 18px; flex-wrap: wrap; }
-  #hud .stat-label { color: #6fa8d0; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; display: block; }
-  #hud .stat-value { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  #status-dot { width: 9px; height: 9px; border-radius: 50%; background: #e6543c; display: inline-block; margin-right: 6px; transition: background 0.3s; }
-  #status-dot.live { background: #35d07f; box-shadow: 0 0 6px #35d07f; }
+  #hud-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  #brand { display: flex; align-items: center; gap: 8px; }
+  #brand-mark {
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    border: 1.5px solid var(--starboard);
+    position: relative;
+    flex-shrink: 0;
+  }
+  #brand-mark::before {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 1px; height: 8px;
+    background: var(--starboard);
+    transform-origin: bottom center;
+    transform: translate(-50%, -100%);
+    animation: sweep 3.2s linear infinite;
+    box-shadow: 0 0 4px var(--starboard);
+  }
+  @keyframes sweep { from { transform: translate(-50%, -100%) rotate(0deg); } to { transform: translate(-50%, -100%) rotate(360deg); } }
+  #brand-text { font-size: 11px; font-weight: 600; letter-spacing: 0.12em; color: var(--ink-dim); text-transform: uppercase; }
+
+  #status-pill {
+    display: flex; align-items: center; gap: 6px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    padding: 4px 10px 4px 8px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  #status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--port); display: inline-block; transition: background 0.3s, box-shadow 0.3s; }
+  #status-dot.live { background: var(--starboard); box-shadow: 0 0 6px var(--starboard); }
+
+  #hud-readouts {
+    display: flex;
+    gap: 22px;
+    margin-top: 9px;
+  }
+  .readout .r-label { color: var(--ink-dim); font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; display: block; margin-bottom: 1px; }
+  .readout .r-value { font-size: 17px; font-weight: 600; color: var(--ink); }
+  .readout .r-value .unit { font-size: 10.5px; font-weight: 500; color: var(--ink-dim); margin-left: 2px; }
+
+  #pos-line {
+    margin-top: 6px;
+    font-size: 10.5px;
+    color: var(--ink-dim);
+    letter-spacing: 0.02em;
+    opacity: 0.75;
+  }
 
   #controls {
     position: absolute;
@@ -39,70 +102,92 @@
     gap: 8px;
   }
   .ctrl-btn {
-    background: rgba(10, 22, 34, 0.92);
-    color: #d7ecff;
-    border: 1px solid #1c3a52;
-    border-radius: 8px;
+    display: flex; align-items: center; gap: 7px;
+    background: var(--panel);
+    color: var(--ink);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
     padding: 10px 14px;
-    font-size: 13px;
+    font-size: 12.5px;
     font-weight: 600;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    font-family: inherit;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.45);
+    backdrop-filter: blur(6px);
     cursor: pointer;
+    justify-content: flex-start;
   }
-  .ctrl-btn:active { background: #143049; }
-  .ctrl-btn.active { border-color: #35d07f; color: #35d07f; }
+  .ctrl-btn .ico { font-size: 13px; line-height: 1; opacity: 0.9; }
+  .ctrl-btn:active { background: #10263a; }
+  .ctrl-btn.active { border-color: var(--starboard); color: var(--starboard); }
 
   #err-banner {
     position: absolute;
-    top: 62px; left: 12px; right: 12px;
+    top: 88px; left: 12px; right: 12px;
     z-index: 1000;
-    background: rgba(230, 84, 60, 0.95);
+    background: rgba(255, 106, 82, 0.96);
     color: white;
     padding: 8px 12px;
-    border-radius: 6px;
+    border-radius: 8px;
     font-size: 12.5px;
     display: none;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.4);
   }
 
-  .leaflet-control-layers { background: rgba(10,22,34,0.92) !important; color: #d7ecff !important; border-color: #1c3a52 !important; }
+  .leaflet-control-layers {
+    background: var(--panel) !important;
+    color: var(--ink) !important;
+    border: 1px solid var(--panel-border) !important;
+    border-radius: 10px !important;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.45) !important;
+    backdrop-filter: blur(6px);
+  }
+  .leaflet-control-layers-toggle { filter: invert(0.9) hue-rotate(180deg); }
+  .leaflet-control-layers-expanded { color: var(--ink) !important; font-size: 12.5px; }
+  .leaflet-top.leaflet-right { top: 92px !important; }
 
 </style>
 </head>
 <body>
 
 <div id="hud">
-  <div class="stats">
-    <div><span class="stat-label"><span id="status-dot"></span>Status</span><span class="stat-value" id="status-text">Waiting</span></div>
-    <div><span class="stat-label">Lat / Lon</span><span class="stat-value" id="pos-text">--</span></div>
-    <div><span class="stat-label">Speed</span><span class="stat-value" id="speed-text">-- kn</span></div>
-    <div><span class="stat-label">Heading</span><span class="stat-value" id="heading-text">--&deg;</span></div>
-    <div><span class="stat-label">Accuracy</span><span class="stat-value" id="acc-text">-- m</span></div>
+  <div id="hud-top">
+    <div id="brand">
+      <div id="brand-mark"></div>
+      <div id="brand-text">Chart Plotter</div>
+    </div>
+    <div id="status-pill"><span id="status-dot"></span><span id="status-text">Waiting</span></div>
   </div>
+  <div id="hud-readouts">
+    <div class="readout"><span class="r-label">Speed</span><span class="r-value mono" id="speed-text">&mdash;<span class="unit">kn</span></span></div>
+    <div class="readout"><span class="r-label">Heading</span><span class="r-value mono" id="heading-text">&mdash;<span class="unit">&deg;</span></span></div>
+    <div class="readout"><span class="r-label">Accuracy</span><span class="r-value mono" id="acc-text">&mdash;<span class="unit">m</span></span></div>
+  </div>
+  <div id="pos-line" class="mono">Lat / Lon &mdash;</div>
 </div>
 
 <div id="err-banner"></div>
 <div id="map"></div>
 
 <div id="controls">
-  <button class="ctrl-btn active" id="track-toggle">Live Tracking</button>
-  <button class="ctrl-btn" id="center-btn">Center on Me</button>
-  <button class="ctrl-btn" id="clear-btn">Clear Trail</button>
+  <button class="ctrl-btn active" id="track-toggle"><span class="ico">&#9679;</span>Live Tracking</button>
+  <button class="ctrl-btn" id="center-btn"><span class="ico">&#8982;</span>Find Ship</button>
+  <button class="ctrl-btn" id="clear-btn"><span class="ico">&#10005;</span>Clear Trail</button>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/gh/IvanSanchez/Leaflet.ImageOverlay.Rotated@gh-pages/Leaflet.ImageOverlay.Rotated.js"></script>
 <script>
-  const map = L.map('map', { zoomControl: true, attributionControl: true, maxZoom: 50 }).setView([37.8, -122.4], 12);
+  const map = L.map('map', { zoomControl: false, attributionControl: true, maxZoom: 23 }).setView([37.8, -122.4], 12);
 
   const osmBase = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap contributors',
-    maxZoom: 50,
+    maxZoom: 23,
     maxNativeZoom: 19
   }).addTo(map);
 
   const esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     attribution: 'Tiles &copy; Esri',
-    maxZoom: 50,
+    maxZoom: 23,
     maxNativeZoom: 19
   });
 
@@ -195,15 +280,15 @@
     const { latitude, longitude, accuracy, speed, heading } = pos.coords;
 
     setStatus(true, 'Live');
-    document.getElementById('pos-text').textContent = latitude.toFixed(5) + ', ' + longitude.toFixed(5);
-    document.getElementById('acc-text').textContent = Math.round(accuracy) + ' m';
+    document.getElementById('pos-line').textContent = 'Lat / Lon ' + latitude.toFixed(5) + ', ' + longitude.toFixed(5);
+    document.getElementById('acc-text').innerHTML = Math.round(accuracy) + '<span class="unit">m</span>';
 
     const kn = knots(speed);
-    document.getElementById('speed-text').textContent = (kn != null && !isNaN(kn)) ? kn.toFixed(1) + ' kn' : '-- kn';
+    document.getElementById('speed-text').innerHTML = (kn != null && !isNaN(kn)) ? kn.toFixed(1) + '<span class="unit">kn</span>' : '&mdash;<span class="unit">kn</span>';
 
     if (heading != null && !isNaN(heading)) {
       lastHeading = heading;
-      document.getElementById('heading-text').textContent = Math.round(heading) + '\u00B0';
+      document.getElementById('heading-text').innerHTML = Math.round(heading) + '<span class="unit">&deg;</span>';
       const arrow = document.getElementById('boat-arrow');
       if (arrow) arrow.style.transform = 'rotate(' + heading + 'deg)';
     }
@@ -266,11 +351,11 @@
     if (tracking) {
       stopTracking();
       this.classList.remove('active');
-      this.textContent = 'Resume Tracking';
+      this.innerHTML = '<span class="ico">&#9679;</span>Resume Tracking';
     } else {
       startTracking();
       this.classList.add('active');
-      this.textContent = 'Live Tracking';
+      this.innerHTML = '<span class="ico">&#9679;</span>Live Tracking';
     }
   });
 
