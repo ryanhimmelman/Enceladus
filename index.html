@@ -143,7 +143,7 @@
   }
   .rt-chip .rt-label { font-weight: 700; opacity: 0.85; }
   .rt-chip .rt-remove { color: var(--ink-dim); cursor: pointer; font-family: 'Inter', sans-serif; padding-left: 2px; }
-  .rt-chip.rt-total { background: rgba(255, 182, 72, 0.08); border-color: rgba(255, 182, 72, 0.35); color: var(--amber); }
+  .rt-chip.rt-current { border-color: var(--starboard); box-shadow: 0 0 6px rgba(53, 208, 127, 0.35); }
 
   #routes-panel {
     display: none;
@@ -273,6 +273,7 @@
     <div class="readout"><span class="r-label">COG</span><span class="r-value mono" id="cog-text">&mdash;<span class="unit">&deg;</span></span></div>
     <div class="readout"><span class="r-label">Mag Hdg</span><span class="r-value mono" id="heading-text">&mdash;<span class="unit">&deg;</span></span></div>
     <div class="readout"><span class="r-label">Accuracy</span><span class="r-value mono" id="acc-text">&mdash;<span class="unit">m</span></span></div>
+    <div class="readout" id="route-total-readout" style="display:none;"><span class="r-label">Route To Go</span><span class="r-value mono" id="route-total-text">&mdash;<span class="unit">nm</span></span></div>
   </div>
   <div id="pos-line" class="mono">Lat / Lon &mdash;</div>
   <div id="waypoint-bar"></div>
@@ -291,6 +292,8 @@
   <button class="ctrl-btn" id="route-btn"><span class="ico">&#8618;</span>Add Route</button>
   <button class="ctrl-btn" id="save-route-btn"><span class="ico">&#128190;</span>Save Route</button>
   <button class="ctrl-btn" id="routes-btn"><span class="ico">&#128193;</span>Routes</button>
+  <button class="ctrl-btn" id="next-wp-btn"><span class="ico">&#9193;</span>Next WP</button>
+  <button class="ctrl-btn" id="auto-advance-btn"><span class="ico">&#9737;</span>Auto-Advance</button>
   <button class="ctrl-btn" id="delete-route-btn"><span class="ico">&#10005;</span>Delete Route</button>
   <button class="ctrl-btn" id="clear-btn"><span class="ico">&#10005;</span>Clear Trail</button>
 </div>
@@ -435,6 +438,16 @@
     trailPoints.push(latlng);
     trail.setLatLngs(trailPoints);
     renderWaypointBar();
+
+    // Auto-advance: if enabled and within arrival radius of the current
+    // route target, move on to the next leg.
+    if (autoAdvance && currentLegIndex < routePoints.length) {
+      const target = routePoints[currentLegIndex].latlng;
+      const distM = distanceNm(latitude, longitude, target.lat, target.lng) * 1852;
+      if (distM <= ARRIVAL_RADIUS_M) {
+        currentLegIndex++;
+      }
+    }
     renderRouteBar();
 
     // Course over ground: bearing between successive fixes. Ignored below
@@ -629,26 +642,38 @@
   let routePoints = []; // { id, latlng, marker }
   let routeCounter = 0;
   let routePicking = false;
+  let currentLegIndex = 0; // index into routePoints of the current target
+  let autoAdvance = false;
+  const ARRIVAL_RADIUS_M = 50;
   const routeBtn = document.getElementById('route-btn');
   const routeBar = document.getElementById('route-bar');
   const routeLine = L.polyline([], { color: '#35d07f', weight: 2.5, opacity: 0.85, dashArray: '2 7' }).addTo(map);
 
   function renderRouteBar() {
     routeBar.innerHTML = '';
-    routeBar.classList.toggle('show', routePoints.length > 0);
+    const remaining = routePoints.slice(currentLegIndex);
+    routeBar.classList.toggle('show', remaining.length > 0);
 
-    // Leg 1: vessel -> first route point (if we have a ship fix)
+    // Draw the full route line (all points), but mark passed points differently.
     const legPoints = [];
-    if (marker && routePoints.length > 0) legPoints.push(marker.getLatLng());
-    routePoints.forEach(rp => legPoints.push(rp.latlng));
+    if (marker && remaining.length > 0) legPoints.push(marker.getLatLng());
+    remaining.forEach(rp => legPoints.push(rp.latlng));
     routeLine.setLatLngs(legPoints);
+
+    routePoints.forEach((rp, i) => {
+      const passed = i < currentLegIndex;
+      const isCurrent = i === currentLegIndex;
+      rp.marker.setOpacity(passed ? 0.35 : 1);
+      const el = rp.marker.getElement();
+      if (el) el.style.filter = isCurrent ? 'drop-shadow(0 0 5px #35d07f)' : 'none';
+    });
 
     let totalNm = 0;
     let totalKnown = true;
 
-    routePoints.forEach((rp, i) => {
-      const from = i === 0 ? (marker ? marker.getLatLng() : null) : routePoints[i - 1].latlng;
-      const fromLabel = i === 0 ? 'V' : routePoints[i - 1].label;
+    remaining.forEach((rp, i) => {
+      const from = i === 0 ? (marker ? marker.getLatLng() : null) : remaining[i - 1].latlng;
+      const fromLabel = i === 0 ? 'V' : remaining[i - 1].label;
       let text = '&mdash; nm @ &mdash;&deg; M';
       if (from) {
         const dist = distanceNm(from.lat, from.lng, rp.latlng.lat, rp.latlng.lng);
@@ -660,16 +685,21 @@
         totalKnown = false;
       }
       const chip = document.createElement('div');
-      chip.className = 'rt-chip';
+      chip.className = 'rt-chip' + (i === 0 ? ' rt-current' : '');
       chip.innerHTML = '<span class="rt-label">' + fromLabel + '&rarr;' + rp.label + '</span><span>' + text + '</span><span class="rt-remove" data-id="' + rp.id + '">&times;</span>';
       routeBar.appendChild(chip);
     });
 
-    if (routePoints.length > 0) {
-      const totalChip = document.createElement('div');
-      totalChip.className = 'rt-chip rt-total';
-      totalChip.innerHTML = '<span class="rt-label">Total</span><span>' + (totalKnown ? totalNm.toFixed(2) + ' nm' : '&mdash; nm') + '</span>';
-      routeBar.appendChild(totalChip);
+    const totalReadout = document.getElementById('route-total-readout');
+    const totalText = document.getElementById('route-total-text');
+    if (remaining.length > 0) {
+      totalReadout.style.display = '';
+      totalText.innerHTML = (totalKnown ? totalNm.toFixed(2) : '&mdash;') + '<span class="unit">nm</span>';
+    } else {
+      totalReadout.style.display = 'none';
+      if (routePoints.length > 0) {
+        // route just completed
+      }
     }
 
     routeBar.querySelectorAll('.rt-remove').forEach(el => {
@@ -678,9 +708,12 @@
   }
 
   function removeRoutePoint(id) {
+    const removedIdx = routePoints.findIndex(r => r.id === id);
     const rp = routePoints.find(r => r.id === id);
     if (rp) map.removeLayer(rp.marker);
     routePoints = routePoints.filter(r => r.id !== id);
+    if (removedIdx > -1 && removedIdx < currentLegIndex) currentLegIndex--;
+    if (currentLegIndex > routePoints.length) currentLegIndex = routePoints.length;
     renderRouteBar();
   }
 
@@ -708,11 +741,25 @@
     addRoutePoint(e.latlng);
   });
 
+  document.getElementById('next-wp-btn').addEventListener('click', () => {
+    if (currentLegIndex < routePoints.length) {
+      currentLegIndex++;
+      renderRouteBar();
+    }
+  });
+
+  const autoAdvanceBtn = document.getElementById('auto-advance-btn');
+  autoAdvanceBtn.addEventListener('click', () => {
+    autoAdvance = !autoAdvance;
+    autoAdvanceBtn.classList.toggle('active', autoAdvance);
+  });
+
   // ---------- Delete active route (resets numbering back to R1) ----------
   function deleteActiveRoute() {
     routePoints.forEach(rp => map.removeLayer(rp.marker));
     routePoints = [];
     routeCounter = 0;
+    currentLegIndex = 0;
     routeLine.setLatLngs([]);
     renderRouteBar();
   }
