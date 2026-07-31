@@ -145,6 +145,19 @@
   .leaflet-control-layers-expanded { color: var(--ink) !important; font-size: 12.5px; }
   .leaflet-top.leaflet-right { top: 92px !important; }
 
+  .waypoint-tooltip {
+    background: var(--panel) !important;
+    color: var(--amber) !important;
+    border: 1px solid var(--panel-border) !important;
+    border-radius: 6px !important;
+    font-family: 'JetBrains Mono', ui-monospace, monospace !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    padding: 3px 7px !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4) !important;
+  }
+  .waypoint-tooltip::before { border-right-color: var(--panel-border) !important; }
+
 </style>
 </head>
 <body>
@@ -159,7 +172,7 @@
   </div>
   <div id="hud-readouts">
     <div class="readout"><span class="r-label">Speed</span><span class="r-value mono" id="speed-text">&mdash;<span class="unit">kn</span></span></div>
-    <div class="readout"><span class="r-label">Heading</span><span class="r-value mono" id="heading-text">&mdash;<span class="unit">&deg;</span></span></div>
+    <div class="readout"><span class="r-label">COG</span><span class="r-value mono" id="heading-text">&mdash;<span class="unit">&deg;</span></span></div>
     <div class="readout"><span class="r-label">Accuracy</span><span class="r-value mono" id="acc-text">&mdash;<span class="unit">m</span></span></div>
   </div>
   <div id="pos-line" class="mono">Lat / Lon &mdash;</div>
@@ -171,6 +184,7 @@
 <div id="controls">
   <button class="ctrl-btn active" id="track-toggle"><span class="ico">&#9679;</span>Live Tracking</button>
   <button class="ctrl-btn" id="center-btn"><span class="ico">&#8982;</span>Find Ship</button>
+  <button class="ctrl-btn" id="waypoint-btn"><span class="ico">&#9873;</span>Add Waypoint</button>
   <button class="ctrl-btn" id="clear-btn"><span class="ico">&#10005;</span>Clear Trail</button>
 </div>
 
@@ -310,6 +324,7 @@
 
     trailPoints.push(latlng);
     trail.setLatLngs(trailPoints);
+    updateAllWaypointTooltips();
 
     if (firstFix) {
       map.setView(latlng, 16);
@@ -366,6 +381,82 @@
   document.getElementById('clear-btn').addEventListener('click', function() {
     trailPoints = [];
     trail.setLatLngs([]);
+  });
+
+  // ---------- Waypoints: course & distance from current position ----------
+  const waypointIcon = L.divIcon({
+    className: 'waypoint-icon',
+    html: `<div style="width:14px;height:14px;background:#ffb648;border:2px solid #071019;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 0 4px rgba(0,0,0,0.5);"></div>`,
+    iconSize: [14, 14],
+    iconAnchor: [7, 14]
+  });
+
+  let waypoints = []; // { id, latlng, marker }
+  let waypointPicking = false;
+  const waypointBtn = document.getElementById('waypoint-btn');
+
+  function toRad(d) { return d * Math.PI / 180; }
+  function toDeg(r) { return r * 180 / Math.PI; }
+
+  function distanceNm(lat1, lon1, lat2, lon2) {
+    const R = 3440.065; // nautical miles
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function bearingDeg(lat1, lon1, lat2, lon2) {
+    const y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
+    const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
+    return (toDeg(Math.atan2(y, x)) + 360) % 360;
+  }
+
+  function waypointTooltipText(wp) {
+    if (!marker) return 'No ship fix yet';
+    const shipLatLng = marker.getLatLng();
+    const dist = distanceNm(shipLatLng.lat, shipLatLng.lng, wp.latlng.lat, wp.latlng.lng);
+    const brg = bearingDeg(shipLatLng.lat, shipLatLng.lng, wp.latlng.lat, wp.latlng.lng);
+    return dist.toFixed(2) + ' nm @ ' + Math.round(brg) + '\u00B0';
+  }
+
+  function updateAllWaypointTooltips() {
+    waypoints.forEach(wp => wp.marker.setTooltipContent(waypointTooltipText(wp)));
+  }
+
+  function addWaypoint(latlng) {
+    const id = Date.now();
+    const m = L.marker(latlng, { icon: waypointIcon }).addTo(map);
+    const wp = { id, latlng, marker: m };
+    m.bindTooltip(waypointTooltipText(wp), {
+      permanent: true,
+      direction: 'right',
+      offset: [4, -8],
+      className: 'waypoint-tooltip'
+    });
+    m.on('click', () => {
+      if (confirm('Remove this waypoint?')) {
+        map.removeLayer(m);
+        waypoints = waypoints.filter(w => w.id !== id);
+      }
+    });
+    waypoints.push(wp);
+  }
+
+  waypointBtn.addEventListener('click', () => {
+    waypointPicking = !waypointPicking;
+    waypointBtn.classList.toggle('active', waypointPicking);
+    waypointBtn.innerHTML = waypointPicking
+      ? '<span class="ico">&#9873;</span>Tap Map...'
+      : '<span class="ico">&#9873;</span>Add Waypoint';
+  });
+
+  map.on('click', (e) => {
+    if (!waypointPicking) return;
+    addWaypoint(e.latlng);
+    waypointPicking = false;
+    waypointBtn.classList.remove('active');
+    waypointBtn.innerHTML = '<span class="ico">&#9873;</span>Add Waypoint';
   });
 
   startTracking();
